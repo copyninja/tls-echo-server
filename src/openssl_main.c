@@ -80,6 +80,7 @@ int HandleMessages(fd_set *fdlist, int *connfd, SSL *ssl) {
   int read_blocked = 0;
   int bytes_read = 0;
   int ssl_error = 0;
+  int rv = 0;
 
   if (result < 0)
     handle_error("select");
@@ -91,7 +92,10 @@ int HandleMessages(fd_set *fdlist, int *connfd, SSL *ssl) {
         switch(ssl_error = SSL_get_error(ssl, bytes_read)) {
         case SSL_ERROR_NONE:
           /* Handle buffer array */
-            return SSL_echo_content(ssl, buffer, bytes_read);
+            rv = SSL_echo_content(ssl, buffer, bytes_read);
+            if (rv < 0)
+              return rv;
+            break;
         case SSL_ERROR_ZERO_RETURN:
           /* Connection closed by client */
           return -1;
