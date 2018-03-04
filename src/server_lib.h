@@ -28,7 +28,7 @@ typedef struct {
 } Server;
 
 Server setup_socket(void);
-void echo_content(int *);
+int echo_content(int *);
 void socket_nonblocking(int *);
 void disable_nagles_algo(int *);
 

@@ -34,7 +34,7 @@ Server setup_socket(void) {
   return s;
 }
 
-void echo_content(int *connfd) {
+int echo_content(int *connfd) {
   unsigned char buffer[2048];
   int size = recv(*connfd, buffer, sizeof(buffer), 0);
   if (size < 0)
@@ -44,7 +44,7 @@ void echo_content(int *connfd) {
     if (strstr((const char*)buffer, "quit") != NULL){
       printf("Closing connection with client\n");
       send(*connfd, "bye\n", 4, 0);
-      exit(EXIT_SUCCESS);
+      return -10;
     }
 
     size = send(*connfd, buffer, size, 0);
@@ -53,6 +53,8 @@ void echo_content(int *connfd) {
     }
   } else
     printf("WARNING: Failed to recieve data\n");
+
+  return size;
 }
 
 void socket_nonblocking(int *connfd) {
