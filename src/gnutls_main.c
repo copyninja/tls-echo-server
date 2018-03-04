@@ -131,6 +131,7 @@ int main(void) {
         for (;;) {
           rv = HandleMessage(&session, &fdlist, &connfd);
           if ( rv < 0) {
+            gnutls_bye(session, GNUTLS_SHUT_RDWR);
             close(connfd);
             gnutls_deinit(session);
             gnutls_certificate_free_credentials(x509_cred);

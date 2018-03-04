@@ -155,6 +155,7 @@ int main(void) {
         /* Keep processing  */
           rv = HandleMessages(&fdlist, &connfd, ssl);
           if (rv < 0) {
+            SSL_shutdown(ssl);
             close(connfd);
             printf("Calling SSL_free to clear SSL session\n");
             SSL_free(ssl);
