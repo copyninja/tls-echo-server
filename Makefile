@@ -3,14 +3,14 @@ SSL ?= none
 
 CFLAGS = -Wall -ggdb
 ifneq (, $(findstring gnutls,$(SSL)))
-LDFLAGS = -lssl -lcrypto
-filter_files = src/gnutls_main.c src/server.c
+LDFLAGS = -lgnutls
+filter_files = src/openssl_main.c src/server.c
 SRCS = $(filter-out $(filter_files), $(SRC))
 endif
 
 ifneq (, $(findstring openssl,$(SSL)))
-LDFLAGS = -lgnutls
-filter_files =  src/openssl_main.c src/server.c
+LDFLAGS = -lssl -lcrypto
+filter_files =  src/gnutls_main.c src/server.c
 SRCS = $(filter-out $(filter_files), $(SRC))
 endif
 
