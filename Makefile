@@ -34,3 +34,9 @@ VPATH = src
 
 $(BINARY): $(OBJS)
 		$(CC) -o $(BINARY) $(patsubst %.o, .obj/%.o, $(OBJS)) $(LDFLAGS)
+
+%.pem:
+	openssl req -x509 -newkey rsa:4096 -keyout privkey.pem -out cert.pem -days 365 -nodes
+
+run: $(BINARY) privkey.pem cert.pem
+	./$(BINARY)
