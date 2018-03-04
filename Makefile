@@ -1,13 +1,23 @@
 SRC = $(wildcard src/*.c)
-SSL ?= openssl
+SSL ?= none
 
 CFLAGS = -Wall -ggdb
-ifeq (, $(findstring gnutls,$(SSL)))
+ifneq (, $(findstring gnutls,$(SSL)))
 LDFLAGS = -lssl -lcrypto
-SRCS = $(filter-out %/gnutls_main.c, $(SRC))
-else
+filter_files = src/gnutls_main.c src/server.c
+SRCS = $(filter-out $(filter_files), $(SRC))
+endif
+
+ifneq (, $(findstring openssl,$(SSL)))
 LDFLAGS = -lgnutls
-SRCS = $(filter-out %/openssl_main.c, $(SRC))
+filter_files =  src/openssl_main.c src/server.c
+SRCS = $(filter-out $(filter_files), $(SRC))
+endif
+
+ifneq (, $(findstring none,$(SSL)))
+LDFLAGS=
+filter_files = src/openssl_main.c src/gnutls_main.c
+SRCS = $(filter-out $(filter_files), $(SRC))
 endif
 
 OBJS = $(patsubst src/%.o, %.o, $(SRCS:.c=.o))
