@@ -128,6 +128,7 @@ int main(void) {
   pid_t pid;
   fd_set fdlist;
   int rv = 0;
+  int err = 0;
 
   for(;;) {
     SSL *ssl = NULL;
@@ -137,24 +138,31 @@ int main(void) {
 
     if (connfd > 0) {
       if ((pid = fork()) == 0) {
-        /* Child starts */
-
         /* Close sockfd we don't need it */
         close(s.sockfd);
-        socket_nonblocking(&connfd);
 
+        /* Noblock */
+        socket_nonblocking(&connfd);
         /* Disable Nagle's algorithm */
         disable_nagles_algo(&connfd);
+
 
         ssl = SSL_new(ctx);
         SSL_set_fd(ssl, connfd);
 
-        if (SSL_accept(ssl) < 0) {
+        do {
+          rv = SSL_accept(ssl);
+          err = SSL_get_error(ssl, rv);
+        } while (rv < 0 && (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE));
+
+        /* SSL handshake */
+        if (rv < 0) {
           close(connfd);
+          fprintf(stderr, "Failed to do the handshake %s\n",ERR_error_string(SSL_get_error(ssl, rv), NULL));
           SSL_free(ssl);
-          fprintf(stderr, "Failed to do the handshake\n");
           goto cleanup_area;
         }
+
 
 
         /* File descriptor set manipulation */
