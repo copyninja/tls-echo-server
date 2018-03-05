@@ -130,19 +130,12 @@ int main(void) {
   int rv = 0;
 
   for(;;) {
-    SSL *ssl;
+    SSL *ssl = NULL;
     connfd = accept(s.sockfd, (struct sockaddr*)&s.sa, (socklen_t*)&s.addrlen);
     if (connfd < 0 && errno != EAGAIN)
       handle_error("accept");
 
     if (connfd > 0) {
-      printf("New SSL object is created\n");
-      ssl = SSL_new(ctx);
-      SSL_set_fd(ssl, connfd);
-
-      if (SSL_accept(ssl) < 0)
-        handle_ssl_error("Error trying to SSL_accept");
-
       if ((pid = fork()) == 0) {
         /* Child starts */
 
@@ -152,6 +145,18 @@ int main(void) {
 
         /* Disable Nagle's algorithm */
         disable_nagles_algo(&connfd);
+
+        ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, connfd);
+
+        if (SSL_accept(ssl) < 0) {
+          close(connfd);
+          SSL_free(ssl);
+          fprintf(stderr, "Failed to do the handshake\n");
+          goto cleanup_area;
+        }
+
+
         /* File descriptor set manipulation */
         FD_ZERO(&fdlist);
         FD_SET(connfd, &fdlist);
@@ -180,8 +185,8 @@ int main(void) {
     }
   }
 
- cleanup_area:
   close(s.sockfd);
+ cleanup_area:
   SSL_CTX_free(ctx);
   cleanup();
 }

@@ -106,24 +106,24 @@ int main(void) {
              inet_ntop(AF_INET, &s.sa.sin_addr, topbuf, sizeof(topbuf)),
              ntohs(s.sa.sin_port));
 
-      gnutls_transport_set_int(session, connfd);
-      do {
-        rv = gnutls_handshake(session);
-      } while (rv < 0 && gnutls_error_is_fatal(rv) == 0);
-
-      if (rv < 0) {
-        close(connfd);
-        gnutls_deinit(session);
-        fprintf(stderr, "*** Handshake has failed (%s)\n\n", gnutls_strerror(rv));
-        continue;
-      }
-
       printf("- Handshake was completed\n");
 
       if ((pid = fork()) == 0) {
         close(s.sockfd);
         socket_nonblocking(&connfd);
         disable_nagles_algo(&connfd);
+
+        gnutls_transport_set_int(session, connfd);
+        do {
+          rv = gnutls_handshake(session);
+        } while (rv < 0 && gnutls_error_is_fatal(rv) == 0);
+
+        if (rv < 0) {
+          close(connfd);
+          gnutls_deinit(session);
+          fprintf(stderr, "*** Handshake has failed (%s)\n\n", gnutls_strerror(rv));
+          goto cleanup;
+        }
 
         FD_ZERO(&fdlist);
         FD_SET(connfd, &fdlist);
@@ -134,9 +134,7 @@ int main(void) {
             gnutls_bye(session, GNUTLS_SHUT_RDWR);
             close(connfd);
             gnutls_deinit(session);
-            gnutls_certificate_free_credentials(x509_cred);
-            gnutls_priority_deinit(priority_cache);
-            exit(rv);
+            goto cleanup;
           }
 
           usleep(1000);
@@ -151,9 +149,12 @@ int main(void) {
   }
 
   close(s.sockfd);
+  gnutls_deinit(session);
+
+ cleanup:
   gnutls_certificate_free_credentials(x509_cred);
   gnutls_priority_deinit(priority_cache);
   gnutls_global_deinit();
 
-    return 0;
+  return 0;
 }
