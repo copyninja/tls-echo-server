@@ -15,22 +15,14 @@
 #include <openssl/err.h>
 
 #include "server_lib.h"
+#include "openssl_serverlib.h"
 
-#define BUFLEN 2048
 #define CERT_FILE "cert.pem"
 #define PRIVKEY_FILE "privkey.pem"
 
 #define handle_ssl_error(msg) \
   do { perror(msg); ERR_print_errors_fp(stderr); exit(EXIT_FAILURE); } while(0)
 
-void init_openssl() {
-  SSL_load_error_strings();
-  OpenSSL_add_ssl_algorithms();
-}
-
-void cleanup() {
-  EVP_cleanup();
-}
 
 SSL_CTX* create_context() {
   const SSL_METHOD *method;
@@ -56,79 +48,18 @@ void configure_context(SSL_CTX *ctx) {
 }
 
 
-
-int SSL_echo_content(SSL *ssl, char *request, int length) {
-  char bye[] = "bye\n";
-  if (strstr((const char*)request, "quit") != NULL) {
-    SSL_write(ssl, bye, 4);
-    return -10;
-  }
-
-  return SSL_write(ssl, request, length);
-}
-
-int HandleMessages(fd_set *fdlist, int *connfd, SSL *ssl) {
-  fd_set testfd = *fdlist;
-  char buffer[BUFLEN] = {'\0'};
-
-  struct timeval timeout;
-
-  timeout.tv_sec = 0;
-  timeout.tv_usec = 0;
-
-  int result = select(FD_SETSIZE, &testfd, NULL, NULL, &timeout);
-  int read_blocked = 0;
-  int bytes_read = 0;
-  int ssl_error = 0;
-  int rv = 0;
-
-  if (result < 0)
-    handle_error("select");
-  if (result > 0) {
-    if (FD_ISSET(*connfd, &testfd)) {
-      do {
-        read_blocked = 0;
-        bytes_read = SSL_read(ssl, buffer, BUFLEN);
-        switch(ssl_error = SSL_get_error(ssl, bytes_read)) {
-        case SSL_ERROR_NONE:
-          /* Handle buffer array */
-            rv = SSL_echo_content(ssl, buffer, bytes_read);
-            if (rv < 0)
-              return rv;
-            break;
-        case SSL_ERROR_ZERO_RETURN:
-          /* Connection closed by client */
-          return -1;
-        case SSL_ERROR_WANT_READ:
-          read_blocked = 1;
-          break;
-        case SSL_ERROR_WANT_WRITE:
-          read_blocked = 1;
-          break;
-        case SSL_ERROR_SYSCALL:
-          return -1;
-        default:
-          return -1;
-        }
-      } while(SSL_pending(ssl) && !read_blocked);
-    }
-  }
-  return 0;
-}
-
 int main(void) {
   Server s = setup_socket();
-  int connfd, flag=1;
+  int connfd;
   SSL_CTX *ctx;
 
-  init_openssl();
+  initOpenSSL();
   ctx = create_context();
   configure_context(ctx);
 
   pid_t pid;
   fd_set fdlist;
   int rv = 0;
-  int err = 0;
 
   for(;;) {
     SSL *ssl = NULL;
@@ -150,19 +81,18 @@ int main(void) {
         ssl = SSL_new(ctx);
         SSL_set_fd(ssl, connfd);
 
-        do {
-          rv = SSL_accept(ssl);
-          err = SSL_get_error(ssl, rv);
-        } while (rv < 0 && (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE));
-
-        /* SSL handshake */
-        if (rv < 0) {
-          close(connfd);
-          fprintf(stderr, "Failed to do the handshake %s\n",ERR_error_string(SSL_get_error(ssl, rv), NULL));
-          SSL_free(ssl);
-          goto cleanup_area;
+        while(true) {
+          rv = sslHandShake(ssl);
+          if (rv > 0)
+            break;
+          else {
+            fprintf(stderr, "SSL handshake failed: %d\n", rv);
+            ERR_print_errors_fp(stderr);
+            close(connfd);
+            SSL_free(ssl);
+            return -1;
+          }
         }
-
 
 
         /* File descriptor set manipulation */
@@ -170,11 +100,11 @@ int main(void) {
         FD_SET(connfd, &fdlist);
         for (;;){
         /* Keep processing  */
-          rv = HandleMessages(&fdlist, &connfd, ssl);
+          rv = HandleMessage(ssl);
           if (rv < 0) {
-            SSL_shutdown(ssl);
+            if (rv != SSL_ERROR_ZERO_RETURN)
+              SSL_shutdown(ssl);
             close(connfd);
-            printf("Calling SSL_free to clear SSL session\n");
             SSL_free(ssl);
             goto cleanup_area;
           }
@@ -196,5 +126,5 @@ int main(void) {
   close(s.sockfd);
  cleanup_area:
   SSL_CTX_free(ctx);
-  cleanup();
+  sslCleanup();
 }
