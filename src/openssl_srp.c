@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 
 #include "server_lib.h"
+#include "openssl_serverlib.h"
 
 #define CHECK(e) ((e) ? (void)(0):onError(#e, __FILE__, __LINE__, true))
 #define SSL_OK 1
@@ -88,108 +89,9 @@ int srpCallback(SSL *s, int *ad, void *arg) {
   return SSL_ERROR_NONE;
 }
 
-void openssl_init() {
-  SSL_library_init();
-  OpenSSL_add_all_algorithms();
-  SSL_load_error_strings();
-}
-
-int sslWait(SSL *ssl, int res) {
-  int err = SSL_get_error(ssl, res);
-  bool doread;
-  switch (err) {
-  case SSL_ERROR_WANT_READ:
-    doread = true;
-    break;
-  case SSL_ERROR_WANT_WRITE:
-  case SSL_ERROR_WANT_CONNECT:
-    doread = false;
-    break;
-  default:
-    return res;
-  }
-
-  int fd = SSL_get_fd(ssl);
-  fd_set fds;
-  FD_ZERO(&fds); FD_SET(fd, &fds);
-  if (doread)
-    res = select(fd+1, &fds, NULL, NULL, NULL);
-  else
-    res = select(fd+1, NULL, &fds, NULL, NULL);
-  assert(res == 1);
-  assert(FD_ISSET(fd, &fds));
-  return SSL_OK;
-}
-int do_handshake(SSL *ssl) {
-  while(true) {
-    int res = SSL_accept(ssl);
-    if (res > 0)
-      return res;
-    else {
-      res = sslWait(ssl, res);
-      if (res < 0) return res;
-    }
-  }
-}
-
-int SSL_echo_content(SSL *ssl, char *request, int length) {
-  char bye[] = "bye\n";
-  if (strstr((const char*)request, "quit") != NULL) {
-    SSL_write(ssl, bye, 4);
-    return -10;
-  }
-
-  return SSL_write(ssl, request, length);
-}
-
-int HandleMessage(SSL *ssl) {
-  int fd = SSL_get_fd(ssl);
-  fd_set fds;
-  FD_ZERO(&fds); FD_SET(fd, &fds);
-
-  int bytes_read = 0;
-  bool readBlocked = false;
-  int err = 0;
-  int result = select(fd+1, &fds, NULL, NULL, NULL);
-
-  char buf[BUFLEN];
-  if (result < 0)
-    return result;
-  if (result > 0) {
-    if(FD_ISSET(fd, &fds)) {
-      do {
-        bytes_read = SSL_read(ssl, buf, BUFLEN);
-        err = SSL_get_error(ssl, bytes_read);
-        switch(err) {
-        case SSL_ERROR_NONE:
-          result = SSL_echo_content(ssl, buf, bytes_read);
-          if (result < 0)
-            return result;
-          break;
-        case SSL_ERROR_ZERO_RETURN:
-          /* Connection closed by  */
-          return err;
-        case SSL_ERROR_WANT_WRITE:
-        case SSL_ERROR_WANT_READ:
-          readBlocked = true;
-          break;
-        default:
-          return -1;
-        }
-      } while(SSL_pending(ssl) && !readBlocked);
-    }
-  }
-  return result;
-}
-
-void sslCleanup() {
-  CRYPTO_cleanup_all_ex_data();
-  ERR_free_strings();
-  EVP_cleanup();
-}
 
 int main(int argc, char *argv[]) {
-  openssl_init();
+  initOpenSSL();
   const SSL_METHOD *method = SSLv23_server_method();
 
   SSL_CTX *ctx = SSL_CTX_new(method);
@@ -199,39 +101,32 @@ int main(int argc, char *argv[]) {
 
   char port[25];
   sprintf(port, "%d", PORT);
-  BIO *server = BIO_new_accept(port);
-  CHECK(server != NULL);
-  CHECK(BIO_set_bind_mode(server, BIO_BIND_REUSEADDR) == SSL_OK);
-  BIO_set_nbio(server, 1);
 
-  /* First accept as listen */
-  int ret = BIO_do_accept(server);
-  if (ret <= 0) {
-    fprintf(stderr, "BIO_do_accept failed: %d\n", ret);
-  } else {
-    for (;;) {
-      if (BIO_do_accept(server) <= 0) {
-        if (errno != EINTR) {
-          fprintf(stderr, "accept failed\n");
-          ERR_print_errors_fp(stderr);
-        }
-        break;
-      }
+  Server s = setup_socket();
 
-      /* Get the connection from bio */
-      BIO *bio = BIO_pop(server);
-      CHECK(bio != NULL);
+  pid_t pid;
+  fd_set fdlist;
+  int connfd;
 
-      if (fork() == 0) {
-        BIO_set_close(server, BIO_NOCLOSE);
-        BIO_free(server);
+  for (;;) {
+    SSL *ssl = NULL;
+    connfd = accept(s.sockfd, (struct sockaddr*)&s.sa, (socklen_t*)&s.addrlen);
 
-        SSL *ssl = SSL_new(ctx);
-        SSL_set_bio(ssl, bio, bio);
-        SSL_set_accept_state(ssl);
+    if (connfd < 0 && errno != EAGAIN){
+      perror("accept failed");
+      goto cleanup;
+    }
 
+    if (connfd > 0) {
+      if ((pid = fork()) == 0) {
+        close(s.sockfd);
+        socket_nonblocking(&connfd);
+        disable_nagles_algo(&connfd);
+
+        ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, connfd);
         while(true) {
-          int res = do_handshake(ssl);
+          int res = sslHandShake(ssl);
           if (res > 0)
             break;
           else if (SSL_get_error(ssl, res) == SSL_ERROR_WANT_X509_LOOKUP) {
@@ -243,6 +138,10 @@ int main(int argc, char *argv[]) {
             return -1;
           }
         }
+
+        FD_ZERO(&fdlist);
+        FD_SET(connfd, &fdlist);
+
         for (;;) {
           int rv = HandleMessage(ssl);
           if(rv < 0){
@@ -254,14 +153,17 @@ int main(int argc, char *argv[]) {
           }
           usleep(1000);
         }
+
       }
 
+      close(connfd);
+      if (ssl != NULL)
+        SSL_free(ssl);
       waitpid(0, NULL, WNOHANG);
       usleep(100000);
     }
   }
 
-  BIO_free(server);
  cleanup:
   if (srpData != NULL) SRP_VBASE_free(srpData);
   SSL_CTX_free(ctx);
