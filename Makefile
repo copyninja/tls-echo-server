@@ -16,7 +16,7 @@ endif
 
 ifneq (, $(findstring none,$(SSL)))
 LDFLAGS=
-filter_files = src/openssl_main.c src/gnutls_main.c src/openssl_srp.c
+filter_files = src/openssl_main.c src/gnutls_main.c src/openssl_srp.c src/openssl_serverlib.c
 SRCS = $(filter-out $(filter_files), $(SRC))
 endif
 
